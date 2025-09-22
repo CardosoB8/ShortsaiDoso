@@ -3,12 +3,13 @@ const Busboy = require('busboy');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static');
 const ffprobePath = require('ffprobe-static');
+const { Readable } = require('stream');
 
-// Use os caminhos estáticos para FFmpeg e FFprobe
+// Usa os caminhos estáticos para FFmpeg e FFprobe
 ffmpeg.setFfmpegPath(ffmpegPath);
 ffmpeg.setFfprobePath(ffprobePath);
 
-// Configurar o Gemini com uma variável de ambiente
+// Configura o Gemini com a variável de ambiente
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
 
@@ -19,7 +20,6 @@ module.exports = async (req, res) => {
     }
 
     let videoBuffer = null;
-    let mimeType = null;
     
     // Encapsula o processo do Busboy em uma Promise
     const busboyProcess = new Promise((resolve, reject) => {
@@ -30,7 +30,6 @@ module.exports = async (req, res) => {
             file.on('data', chunk => chunks.push(chunk));
             file.on('end', () => {
                 videoBuffer = Buffer.concat(chunks);
-                mimeType = mimetypeParam;
             });
             file.on('error', reject);
         });
@@ -42,27 +41,30 @@ module.exports = async (req, res) => {
     });
 
     try {
-        await busboyProcess; // Espera o Busboy terminar de carregar o arquivo
+        await busboyProcess;
 
         if (!videoBuffer) {
             return res.status(400).send('Nenhum vídeo foi enviado ou o upload falhou.');
         }
 
-        // 1. Extrair áudio do buffer de vídeo
+        // 1. Extrai áudio do buffer do vídeo
         const audioBuffer = await new Promise((resolve, reject) => {
             const chunks = [];
-            const stream = ffmpeg(videoBuffer, { timeout: 120 })
-                .inputFormat('mp4') // <--- Correção aplicada aqui
+            const readableStream = new Readable();
+            readableStream._read = () => {}; 
+            readableStream.push(videoBuffer);
+            readableStream.push(null); 
+
+            ffmpeg(readableStream) // Passa o stream diretamente para o FFmpeg
                 .toFormat('mp3')
                 .on('end', () => resolve(Buffer.concat(chunks)))
-                .on('error', (err) => reject(new Error('Erro ao extrair áudio: ' + err.message)))
+                .on('error', (err) => reject(new Error('Falha na extração de áudio: ' + err.message)))
                 .pipe();
 
-            stream.on('data', chunk => chunks.push(chunk));
-            stream.on('error', reject);
+            readableStream.pipe(ffmpeg().toFormat('mp3'));
         });
-        
-        // 2. Transcrever áudio com o Gemini
+
+        // 2. Transcreve áudio com o Gemini
         const filePart = {
             mimeType: 'audio/mp3',
             fileData: audioBuffer,
@@ -85,23 +87,26 @@ module.exports = async (req, res) => {
             return res.status(500).json({ error: 'A IA não conseguiu identificar os trechos.' });
         }
 
-        // 3. Cortar o vídeo
+        // 3. Corta o vídeo
         const processedShorts = [];
 
         for (const short of shortsData.shorts) {
             const outputBuffer = await new Promise((resolve, reject) => {
                 const chunks = [];
-                const stream = ffmpeg(videoBuffer, { timeout: 120 })
-                    .inputFormat('mp4') // <--- Correção aplicada aqui
+                const readableStream = new Readable();
+                readableStream._read = () => {};
+                readableStream.push(videoBuffer);
+                readableStream.push(null);
+
+                ffmpeg(readableStream) // Passa o stream diretamente para o FFmpeg
                     .setStartTime(short.start)
                     .setDuration(new Date(`1970-01-01T${short.end}Z`).getTime() - new Date(`1970-01-01T${short.start}Z`).getTime())
                     .toFormat('mp4')
                     .on('end', () => resolve(Buffer.concat(chunks)))
-                    .on('error', (err) => reject(new Error('Erro ao cortar vídeo: ' + err.message)))
+                    .on('error', (err) => reject(new Error('Falha no corte do vídeo: ' + err.message)))
                     .pipe();
 
-                stream.on('data', chunk => chunks.push(chunk));
-                stream.on('error', reject);
+                readableStream.pipe(ffmpeg().setStartTime(short.start).setDuration(new Date(`1970-01-01T${short.end}Z`).getTime() - new Date(`1970-01-01T${short.start}Z`).getTime()).toFormat('mp4'));
             });
             
             processedShorts.push({
@@ -114,7 +119,7 @@ module.exports = async (req, res) => {
         res.json({ shorts: processedShorts });
 
     } catch (error) {
-        console.error('Erro no processamento:', error);
+        console.error('Erro de processamento:', error);
         res.status(500).json({ error: error.message || 'Ocorreu um erro no servidor.' });
     }
 };
