@@ -117,26 +117,4 @@ module.exports = async (req, res) => {
         console.error('Erro no processamento:', error);
         res.status(500).json({ error: error.message || 'Ocorreu um erro no servidor.' });
     }
-};                        resolve(Buffer.concat(chunks));
-                    })
-                    .on('error', (err) => {
-                        console.error('Erro ao cortar vídeo:', err);
-                        reject(new Error('Erro ao cortar vídeo: ' + err.message));
-                    })
-                    .pipe(chunks);
-            });
-            
-            processedShorts.push({
-                start: short.start,
-                end: short.end,
-                data: outputBuffer.toString('base64')
-            });
-        }
-
-        res.json({ shorts: processedShorts });
-
-    } catch (error) {
-        console.error('Erro no processamento:', error);
-        res.status(500).json({ error: error.message || 'Ocorreu um erro no servidor.' });
-    }
 };
