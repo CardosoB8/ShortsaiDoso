@@ -1,34 +1,19 @@
-const videoInput = document.getElementById('video-input');
 const processButton = document.getElementById('process-button');
 const statusMessage = document.getElementById('status-message');
 const downloadLinks = document.getElementById('download-links');
 
-videoInput.addEventListener('change', () => {
-    processButton.disabled = !videoInput.files[0];
-});
-
 processButton.addEventListener('click', async () => {
-    const file = videoInput.files[0];
-    if (!file) {
-        statusMessage.textContent = 'Por favor, selecione um vídeo.';
-        return;
-    }
-
-    const formData = new FormData();
-    formData.append('video', file);
-
     statusMessage.textContent = 'Processando... isso pode levar alguns minutos.';
     processButton.disabled = true;
     downloadLinks.innerHTML = '';
 
     try {
-        const response = await fetch('/api/process', { // O endpoint é agora /api/process
+        const response = await fetch('/api/process', {
             method: 'POST',
-            body: formData,
         });
 
         if (!response.ok) {
-            throw new Error('Erro no servidor. Verifique o console.');
+            throw new Error('Erro no servidor. Verifique os logs da Vercel.');
         }
 
         const result = await response.json();
