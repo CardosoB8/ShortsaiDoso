@@ -15,28 +15,39 @@ const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
 // Esta é a função que a Vercel vai executar
 module.exports = async (req, res) => {
     if (req.method !== 'POST') {
-        return res.status(405).send('Método não permitido');
+        return res.status(405).send('Método não permitido.');
     }
 
-    try {
+    let videoBuffer = null;
+    let mimeType = null;
+    
+    // Encapsula o processo do Busboy em uma Promise
+    const busboyProcess = new Promise((resolve, reject) => {
         const busboy = Busboy({ headers: req.headers });
-        let videoBuffer = null;
         
-        // Use uma Promise para esperar que o arquivo seja completamente carregado
-        const fileUploadPromise = new Promise((resolve, reject) => {
-            busboy.on('file', (fieldname, file, filename, encoding, mimetype) => {
-                const chunks = [];
-                file.on('data', chunk => chunks.push(chunk));
-                file.on('end', () => {
-                    videoBuffer = Buffer.concat(chunks);
-                });
-                file.on('error', reject);
+        busboy.on('file', (fieldname, file, filename, encoding, mimetypeParam) => {
+            console.log(`Recebendo arquivo: ${filename}`);
+            const chunks = [];
+            file.on('data', chunk => chunks.push(chunk));
+            file.on('end', () => {
+                videoBuffer = Buffer.concat(chunks);
+                mimeType = mimetypeParam;
+                console.log('Arquivo recebido e buffer criado.');
             });
-            busboy.on('finish', resolve);
-            req.pipe(busboy);
+            file.on('error', reject);
         });
 
-        await fileUploadPromise;
+        busboy.on('finish', () => {
+            console.log('Busboy terminou de processar.');
+            resolve();
+        });
+
+        busboy.on('error', reject);
+        req.pipe(busboy);
+    });
+
+    try {
+        await busboyProcess; // Espera o Busboy terminar de carregar o arquivo
 
         if (!videoBuffer) {
             return res.status(400).send('Nenhum vídeo foi enviado ou o upload falhou.');
@@ -45,13 +56,17 @@ module.exports = async (req, res) => {
         // 1. Extrair áudio do buffer de vídeo
         const audioBuffer = await new Promise((resolve, reject) => {
             const chunks = [];
-            const stream = ffmpeg(videoBuffer, { timeout: 120 })
-                .inputFormat('mp4')
+            const stream = ffmpeg(videoBuffer)
                 .toFormat('mp3')
-                .on('end', () => resolve(Buffer.concat(chunks)))
-                .on('error', (err) => reject(new Error('Erro ao extrair áudio: ' + err.message)));
-            
-            stream.pipe(chunks);
+                .on('end', () => {
+                    console.log('Extração de áudio concluída.');
+                    resolve(Buffer.concat(chunks));
+                })
+                .on('error', (err) => {
+                    console.error('Erro na extração de áudio:', err);
+                    reject(new Error('Erro ao extrair áudio: ' + err.message));
+                })
+                .pipe(chunks);
         });
         
         // 2. Transcrever áudio com o Gemini
@@ -83,14 +98,19 @@ module.exports = async (req, res) => {
         for (const short of shortsData.shorts) {
             const outputBuffer = await new Promise((resolve, reject) => {
                 const chunks = [];
-                const stream = ffmpeg(videoBuffer, { timeout: 120 })
+                const stream = ffmpeg(videoBuffer)
                     .setStartTime(short.start)
                     .setDuration(new Date(`1970-01-01T${short.end}Z`).getTime() - new Date(`1970-01-01T${short.start}Z`).getTime())
                     .toFormat('mp4')
-                    .on('end', () => resolve(Buffer.concat(chunks)))
-                    .on('error', (err) => reject(new Error('Erro ao cortar vídeo: ' + err.message)));
-
-                stream.pipe(chunks);
+                    .on('end', () => {
+                        console.log(`Corte de vídeo concluído para o trecho de ${short.start} a ${short.end}.`);
+                        resolve(Buffer.concat(chunks));
+                    })
+                    .on('error', (err) => {
+                        console.error('Erro ao cortar vídeo:', err);
+                        reject(new Error('Erro ao cortar vídeo: ' + err.message));
+                    })
+                    .pipe(chunks);
             });
             
             processedShorts.push({
